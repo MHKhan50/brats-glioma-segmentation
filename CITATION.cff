@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Brain-tumour segmentation on BraTS-GLI: 3D U-Net vs SwinUNETR"
+version: 0.1.0
+date-released: 2026-11-21
+license: MIT
+repository-code: "https://github.com/MHKhan50/brats-glioma-segmentation"
+authors:
+  - family-names: Hussain
+    given-names: Muzammal
+    affiliation: "Independent researcher, Glasgow, United Kingdom"
+    orcid: "https://orcid.org/0009-0001-2570-5686"
+keywords:
+  - brain tumour segmentation
+  - glioma
+  - MRI
+  - BraTS
+  - 3D U-Net
+  - SwinUNETR
+  - medical imaging
