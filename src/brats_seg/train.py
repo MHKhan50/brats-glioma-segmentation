@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -93,8 +94,7 @@ def train_one(name: str, data_dir: str, out_dir: str, seed: int = 0, epochs: int
     if torch.cuda.device_count() > 1:
         model = torch.nn.DataParallel(model)
     loader = torch.utils.data.DataLoader(CaseDataset(files["train"], True, seed=seed), batch_size=batch_size,
-                                         shuffle=True, num_workers=4, pin_memory=True, drop_last=True,
-                                         persistent_workers=True)
+                                         shuffle=True, num_workers=2, pin_memory=True, drop_last=True)
     val_set = CaseDataset(files["val"][:max_val_cases] if max_val_cases else files["val"], False)
     dice_loss = DiceLoss(sigmoid=True, smooth_nr=1e-5, smooth_dr=1e-5)
     bce = torch.nn.BCEWithLogitsLoss()
@@ -103,8 +103,20 @@ def train_one(name: str, data_dir: str, out_dir: str, seed: int = 0, epochs: int
     scaler = torch.amp.GradScaler(enabled=dev.type == "cuda")
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     tag = f"{name}_s{seed}"
-    best, history, t0 = -1.0, [], time.time()
-    for epoch in range(1, epochs + 1):
+    meta_path, last_path = out / f"{tag}_meta.json", out / f"{tag}_last.pt"
+    if meta_path.exists():
+        done = json.loads(meta_path.read_text())
+        if done.get("finished") and done.get("epochs") == epochs:
+            print(f"{tag}: already trained ({epochs} epochs), skipping", flush=True)
+            return {k: v for k, v in done.items() if k != "history"}
+    best, history, t0, start, spent = -1.0, [], time.time(), 1, 0.0
+    if last_path.exists():  # resume after an interrupted session
+        ck = torch.load(last_path, map_location=dev, weights_only=False)
+        (model.module if hasattr(model, "module") else model).load_state_dict(ck["state_dict"])
+        opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"]); scaler.load_state_dict(ck["scaler"])
+        best, history, start, spent = ck["best"], ck["history"], ck["epoch"] + 1, ck.get("minutes", 0.0)
+        print(f"{tag}: resuming at epoch {start} (best val mean Dice so far {best:.4f})", flush=True)
+    for epoch in range(start, epochs + 1):
         model.train(); losses = []
         for step, (x, y) in enumerate(loader):
             x, y = x.to(dev, non_blocking=True), y.to(dev, non_blocking=True)
@@ -117,7 +129,7 @@ def train_one(name: str, data_dir: str, out_dir: str, seed: int = 0, epochs: int
             if limit_steps and step + 1 >= limit_steps:
                 break
         sched.step()
-        rec = {"epoch": epoch, "loss": float(np.mean(losses)), "minutes": round((time.time() - t0) / 60, 1)}
+        rec = {"epoch": epoch, "loss": float(np.mean(losses)), "minutes": round(spent + (time.time() - t0) / 60, 1)}
         if epoch % val_every == 0 or epoch == epochs:
             model.eval(); scores = []
             for i in range(len(val_set)):
@@ -132,8 +144,13 @@ def train_one(name: str, data_dir: str, out_dir: str, seed: int = 0, epochs: int
                 torch.save({"state_dict": state, "model": name, "seed": seed, "epoch": epoch}, out / f"{tag}_best.pt")
         history.append(rec)
         print(json.dumps(rec), flush=True)
+        state = model.module.state_dict() if hasattr(model, "module") else model.state_dict()
+        torch.save({"state_dict": state, "opt": opt.state_dict(), "sched": sched.state_dict(),
+                    "scaler": scaler.state_dict(), "epoch": epoch, "best": best, "history": history,
+                    "minutes": rec["minutes"]}, str(last_path) + ".tmp")
+        os.replace(str(last_path) + ".tmp", last_path)  # a kill during saving cannot corrupt the checkpoint
     meta = {"model": name, "seed": seed, "epochs": epochs, "batch_size": batch_size, "best_val_mean_dice": best,
-            "params": int(sum(p.numel() for p in model.parameters())), "minutes": round((time.time() - t0) / 60, 1),
-            "history": history}
-    (out / f"{tag}_meta.json").write_text(json.dumps(meta, indent=2))
+            "params": int(sum(p.numel() for p in model.parameters())),
+            "minutes": round(spent + (time.time() - t0) / 60, 1), "finished": True, "history": history}
+    meta_path.write_text(json.dumps(meta, indent=2))
     return {k: v for k, v in meta.items() if k != "history"}
