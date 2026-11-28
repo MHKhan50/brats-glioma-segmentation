@@ -22,6 +22,8 @@ def main(argv=None):
     e = sub.add_parser("evaluate"); e.add_argument("--data", required=True); e.add_argument("--runs", required=True)
     e.add_argument("--out", required=True); e.add_argument("--limit", type=int, default=0)
     a = sub.add_parser("analyse"); a.add_argument("--reports", required=True)
+    pp = sub.add_parser("postprocess"); pp.add_argument("--data", required=True); pp.add_argument("--runs", required=True)
+    pp.add_argument("--out", required=True); pp.add_argument("--limit", type=int, default=0)
     args = p.parse_args(argv)
 
     if args.cmd == "download":
@@ -44,6 +46,9 @@ def main(argv=None):
         from .evaluate import evaluate_models
         df = evaluate_models(args.data, args.runs, args.out, limit=args.limit)
         print(df.groupby(["model", "seed"])[[c for c in df.columns if c.startswith("dice_")]].mean().round(4).to_string())
+    elif args.cmd == "postprocess":
+        from .postprocess import run
+        print(json.dumps(run(args.data, args.runs, args.out, limit=args.limit), indent=2))
     elif args.cmd == "analyse":
         import pandas as pd
         from .evaluate import summarise, summary_markdown
